@@ -12,9 +12,9 @@ def get_config():
             key, _, value = line.strip().partition("=")
             if key and value:
                 config[key.strip()] = value.strip('"')
-    if "SERIAL" not in config or "IP" not in config:
-        raise ValueError("Both SERIAL and IP must be specified in secrets.txt")
-    return config["SERIAL"], config["INVERTERIP"]
+    if "INVERTER_SERIAL" not in config or "INVERTER_IP" not in config:
+        raise ValueError("Both INVERTER_SERIAL and INVERTER_IP must be specified in secrets.txt")
+    return config["INVERTER_SERIAL"], config["INVERTER_IP"]
 
 # Load inverter entry points
 INVERTERS_ENTRY_POINTS = {
