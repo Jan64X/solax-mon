@@ -137,9 +137,18 @@ class SolarMonitor:
             solar_power = data.data.get('PV1 Power', 0.0) + data.data.get('PV2 Power', 0.0)
             battery_percent = data.data.get('Battery Remaining Capacity', 0.0)
             home_consumption = data.data.get('Load/Generator Power', 0.0)
+            battery_power = data.data.get('Battery Power', 0.0)
+            
+            # Determine battery status
+            if battery_power > 0:
+                battery_status = "Charging"
+            elif battery_power < 0:
+                battery_status = "Discharging"
+            else:
+                battery_status = "Idle"
             
             # Debug print raw values
-            logger.debug(f"Raw data values: Grid={grid_power}, Solar={solar_power}, Battery={battery_percent}, Home={home_consumption}")
+            logger.debug(f"Raw data values: Grid={grid_power}, Solar={solar_power}, Battery={battery_percent}, Home={home_consumption}, Battery Power={battery_power}")
             
             grid_status, grid_connection = self.get_grid_status(grid_power)
             
@@ -148,6 +157,7 @@ class SolarMonitor:
 └─ Grid Power: {grid_power}W -> {grid_status} ({grid_connection})
 └─ Solar Production: {solar_power}W
 └─ Battery Level: {battery_percent}%
+└─ Battery Power: {battery_power}W ({battery_status})
 └─ Home Consumption: {home_consumption}W
 """
             print(status)
@@ -238,11 +248,22 @@ class SolarStatusServer(BaseHTTPRequestHandler):
         try:
             grid_power = float(data.data.get('Grid Power ', 0.0))
             grid_status, grid_connection = monitor.get_grid_status(grid_power)
+            battery_power = float(data.data.get('Battery Power', 0.0))
+            
+            # Determine battery status
+            if battery_power > 0:
+                battery_status = "Charging"
+            elif battery_power < 0:
+                battery_status = "Discharging"
+            else:
+                battery_status = "Idle"
             
             status = {
                 "Grid": f"{grid_status} ({grid_connection})",
                 "Solar Panels": f"{data.data.get('PV1 Power', 0.0) + data.data.get('PV2 Power', 0.0)}W",
                 "Batteries": f"{data.data.get('Battery Remaining Capacity', 0.0)}%",
+                "Battery Power": f"{battery_power}W",
+                "Battery Status": battery_status,
                 "Home Consumption": f"{data.data.get('Load/Generator Power', 0.0)}W"
             }
 
