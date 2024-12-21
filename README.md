@@ -1,6 +1,10 @@
 # solax-mon
-Solar monitoring with local JSON API using the Solar framework
-Added better handling of client credentials using a secrets.txt file.
+
+Monitoring program in Rust for the Solax x3 hybrid gen4. Right now it only prints the most important formatted data.
 
 TODO:
-Fix the grid stat, ill propably have to turn off the grid supply line to check for this (current API isn't super clear)
+
+- Rewrite the code to fix warnings
+- Make the formatted status print lines in a specific order
+- Add actual JSON API endpoint in separate program
+- Add getting parameters from secrets.txt to not have to recompile because fo every change in IP for example
