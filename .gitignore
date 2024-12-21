@@ -1,2 +1,3 @@
 secrets.txt
 target/
+Cargo.lock

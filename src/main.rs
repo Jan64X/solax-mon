@@ -165,13 +165,8 @@ impl X3HybridG4 {
             .map_or(0.0, |m| m.value);
         
         status.insert("Batteries".to_string(), format!("{:.1}%", battery_capacity));
-        status.insert("Battery Power".to_string(), format!("{:.1}W", battery_power.abs()));
         status.insert("Battery Status".to_string(), battery_status.to_string());
-
-        // Home Consumption
-        let consumption = measurements.get("Load/Generator Power")
-            .map_or(0.0, |m| m.value);
-        status.insert("Home Consumption".to_string(), format!("{:.1}W", consumption));
+        status.insert("Battery Power".to_string(), format!("{:.1}W", battery_power.abs()));
 
         // Grid Power Status, swapped import/export because weird api idk
         let grid_power = measurements.get("Grid Power")
@@ -186,6 +181,11 @@ impl X3HybridG4 {
         let grid_connection = format!("{:.1}W", grid_power.abs());
         status.insert("Grid".to_string(), format!("{} ({})", grid_status, grid_connection));
 
+        // Home Consumption
+        let consumption = measurements.get("Load/Generator Power")
+            .map_or(0.0, |m| m.value);
+        status.insert("Home Consumption".to_string(), format!("{:.1}W", consumption));
+
         status
     }
 }
@@ -194,13 +194,28 @@ impl X3HybridG4 {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let inverter = X3HybridG4::new();
     let url = "http://10.0.203.11";
-    let password = "SVU8PUWHZZ";
+    let password = "SERIALHERE";
 
     match inverter.fetch_data(url, password).await {
         Ok(measurements) => {
+            let status = inverter.format_status(&measurements);
             println!("\nFormatted Status:");
-            for (key, value) in inverter.format_status(&measurements) {
-                println!("{}: {}", key, value);
+            
+            // Define the order of status items
+            let order = [
+                "Solar Panels",
+                "Batteries",
+                "Battery Status",
+                "Battery Power",
+                "Grid",
+                "Home Consumption"
+            ];
+
+            // Print items in the defined order
+            for key in order.iter() {
+                if let Some(value) = status.get(*key) {
+                    println!("{}: {}", key, value);
+                }
             }
         },
         Err(e) => eprintln!("Error fetching data: {}", e),
