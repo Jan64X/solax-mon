@@ -1,7 +1,19 @@
-use serde::{Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use axum::{
+    Router,
+    routing::get,
+    extract::State,
+    response::Json,
+};
 use reqwest::Client;
 use serde_json::Value;
+use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 struct InverterResponse {
@@ -33,10 +45,46 @@ struct Measurement {
     unit: Units,
 }
 
+#[derive(Debug, Serialize, Clone)]
+struct StatusOutput {
+    solar_panels: String,
+    batteries: String,
+    battery_status: String,
+    battery_power: String,
+    grid_status: String,
+    grid_power: String,
+    home_consumption: String,
+}
+
 type TransformFn = fn(f64, Option<&[i32]>) -> f64;
 
 struct X3HybridG4 {
     response_map: HashMap<String, (usize, Units, Option<TransformFn>)>,
+}
+
+fn read_secrets() -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
+    let mut ip = String::new();
+    let mut serial = String::new();
+    
+    let file = File::open(Path::new("/srv/solax-mon/data/secrets.txt"))?;
+    let reader = BufReader::new(file);
+    
+    for line in reader.lines() {
+        let line = line?;
+        if let Some((key, value)) = line.split_once('=') {
+            match key.trim() {
+                "INVERTER_IP" => ip = value.trim().to_string(),
+                "SERIAL" => serial = value.trim().to_string(),
+                _ => (),
+            }
+        }
+    }
+    
+    if ip.is_empty() || serial.is_empty() {
+        return Err("Missing required secrets".into());
+    }
+    
+    Ok((ip, serial))
 }
 
 impl X3HybridG4 {
@@ -49,7 +97,7 @@ impl X3HybridG4 {
             let x = x as i32;
             f64::from(if x > 32767 { x - 65536 } else { x })
         }
-        fn calculate_grid_power(x: f64, data: Option<&[i32]>) -> f64 {
+        fn calculate_grid_power(_x: f64, data: Option<&[i32]>) -> f64 {
             if let Some(data) = data {
                 if let (Some(&high), Some(&low)) = (data.get(34), data.get(35)) {
                     let combined = ((high as i64) << 16) | ((low as i64) & 0xFFFF);
@@ -98,7 +146,7 @@ impl X3HybridG4 {
         Self { response_map }
     }
 
-    async fn fetch_data(&self, url: &str, password: &str) -> Result<HashMap<String, Measurement>, Box<dyn std::error::Error>> {
+    async fn fetch_data(&self, url: &str, password: &str) -> Result<HashMap<String, Measurement>, Box<dyn std::error::Error + Send + Sync>> {
         let client = Client::new();
         let params = [("optType", "ReadRealTimeData"), ("pwd", password)];
         
@@ -111,7 +159,6 @@ impl X3HybridG4 {
 
         let mut measurements = HashMap::new();
 
-        // Process individual measurements
         for (key, (index, unit, transform_fn)) in &self.response_map {
             if let Some(value) = response.data.get(*index) {
                 let value = f64::from(*value);
@@ -128,7 +175,6 @@ impl X3HybridG4 {
             }
         }
 
-        // Calculate combined values
         if let (Some(pv1), Some(pv2)) = (
             measurements.get("PV1 Power"),
             measurements.get("PV2 Power")
@@ -142,15 +188,10 @@ impl X3HybridG4 {
         Ok(measurements)
     }
 
-    fn format_status(&self, measurements: &HashMap<String, Measurement>) -> HashMap<String, String> {
-        let mut status = HashMap::new();
-
-        // Total Solar Power
+    fn format_status(&self, measurements: &HashMap<String, Measurement>) -> StatusOutput {
         let solar_power = measurements.get("Total Solar Power")
             .map_or(0.0, |m| m.value);
-        status.insert("Solar Panels".to_string(), format!("{:.1}W", solar_power));
 
-        // Battery Status
         let battery_power = measurements.get("Battery Power")
             .map_or(0.0, |m| m.value);
         let battery_status = if battery_power < 0.0 {
@@ -163,12 +204,7 @@ impl X3HybridG4 {
         
         let battery_capacity = measurements.get("Battery Remaining Capacity")
             .map_or(0.0, |m| m.value);
-        
-        status.insert("Batteries".to_string(), format!("{:.1}%", battery_capacity));
-        status.insert("Battery Status".to_string(), battery_status.to_string());
-        status.insert("Battery Power".to_string(), format!("{:.1}W", battery_power.abs()));
 
-        // Grid Power Status, swapped import/export because weird api idk
         let grid_power = measurements.get("Grid Power")
             .map_or(0.0, |m| m.value);
         let grid_status = if grid_power < 0.0 {
@@ -178,48 +214,76 @@ impl X3HybridG4 {
         } else {
             "Idle"
         };
-        let grid_connection = format!("{:.1}W", grid_power.abs());
-        status.insert("Grid".to_string(), format!("{} ({})", grid_status, grid_connection));
 
-        // Home Consumption
         let consumption = measurements.get("Load/Generator Power")
             .map_or(0.0, |m| m.value);
-        status.insert("Home Consumption".to_string(), format!("{:.1}W", consumption));
 
-        status
+        StatusOutput {
+            solar_panels: format!("{:.1}W", solar_power),
+            batteries: format!("{:.1}%", battery_capacity),
+            battery_status: battery_status.to_string(),
+            battery_power: format!("{:.1}W", battery_power.abs()),
+            grid_status: grid_status.to_string(),
+            grid_power: format!("{:.1}W", grid_power.abs()),
+            home_consumption: format!("{:.1}W", consumption),
+        }
     }
 }
 
+async fn get_status(
+    State(state): State<Arc<RwLock<StatusOutput>>>,
+) -> Json<StatusOutput> {
+    let status = state.read().await.clone();
+    Json(status)
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let inverter = X3HybridG4::new();
-    let url = "http://10.0.203.11";
-    let password = "SERIALHERE";
+    
+    // Read secrets from file
+    let (ip, serial) = read_secrets()?;
+    let url = format!("http://{}", ip);
 
-    match inverter.fetch_data(url, password).await {
-        Ok(measurements) => {
-            let status = inverter.format_status(&measurements);
-            println!("\nFormatted Status:");
-            
-            // Define the order of status items
-            let order = [
-                "Solar Panels",
-                "Batteries",
-                "Battery Status",
-                "Battery Power",
-                "Grid",
-                "Home Consumption"
-            ];
+    // Create shared state for the web server
+    let shared_status = Arc::new(RwLock::new(StatusOutput {
+        solar_panels: "0.0W".to_string(),
+        batteries: "0.0%".to_string(),
+        battery_status: "Unknown".to_string(),
+        battery_power: "0.0W".to_string(),
+        grid_status: "Unknown".to_string(),
+        grid_power: "0.0W".to_string(),
+        home_consumption: "0.0W".to_string(),
+    }));
 
-            // Print items in the defined order
-            for key in order.iter() {
-                if let Some(value) = status.get(*key) {
-                    println!("{}: {}", key, value);
-                }
+    // Clone the shared state for the background task
+    let status_clone = shared_status.clone();
+
+    // Spawn the data collection task
+    tokio::spawn(async move {
+        loop {
+            match inverter.fetch_data(&url, &serial).await {
+                Ok(measurements) => {
+                    let status = inverter.format_status(&measurements);
+                    *status_clone.write().await = status;
+                    println!("Data updated successfully");
+                },
+                Err(e) => eprintln!("Error fetching data: {}", e),
             }
-        },
-        Err(e) => eprintln!("Error fetching data: {}", e),
-    }
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+    });
+
+    // Create the router
+    let app = Router::new()
+        .route("/status", get(get_status))
+        .with_state(shared_status);
+
+    // Start the server
+    println!("Starting server on http://localhost:3000");
+    axum::Server::bind(&"0.0.0.0:3000".parse()?)
+        .serve(app.into_make_service())
+        .await?;
 
     Ok(())
 }
