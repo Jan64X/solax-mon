@@ -21,7 +21,7 @@ docker build --build-arg TARGETARCH=amd64 -t solax-mon:amd64 .
 
 ```bash
 cross build --release --target aarch64-unknown-linux-musl
-docker build --build-arg TARGETARCH=amd64 -t solax-mon:arm64 .
+docker build --build-arg TARGETARCH=arm64 -t solax-mon:arm64 .
 ```
 
 ## Running the Container
