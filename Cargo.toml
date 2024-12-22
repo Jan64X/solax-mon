@@ -1,5 +1,5 @@
 [package]
-name = "solax-monitor"
+name = "solax-mon"
 version = "0.1.0"
 edition = "2021"
 
@@ -10,3 +10,4 @@ tokio = { version = "1.0", features = ["full"] }
 serde_json = "1.0"
 openssl = { version = "0.10", features = ["vendored"] }
 axum = "0.6"
+anyhow = "1.0"
